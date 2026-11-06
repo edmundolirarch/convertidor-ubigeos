@@ -11,9 +11,7 @@ st.title("📍 Convertidor y Validador de Ubigeos")
 @st.cache_data
 def load_master():
     df = pd.read_excel('Ubigeos.xlsx')
-    # Asegurar que el Ubigeo tenga 6 dígitos
     df['Ubigeo'] = df['Ubigeo'].astype(str).str.zfill(6)
-    # Crear columna concatenada para búsqueda
     df['Concat'] = df['Departamento'] + " | " + df['Provincia'] + " | " + df['Distrito']
     return df
 
@@ -21,50 +19,45 @@ df_master = load_master()
 master_choices = df_master['Concat'].tolist()
 ubigeo_dict = dict(zip(df_master['Concat'], df_master['Ubigeo']))
 
-# Función para procesar y buscar similitudes
-def procesar_datos(df_input):
-    resultados_exactos = []
-    resultados_pendientes = []
-    
-    # Progreso visual
+# Función inicial de procesamiento
+def iniciar_procesamiento(df_input):
+    data = {}
     progress_bar = st.progress(0)
     total = len(df_input)
     
     for idx, row in df_input.iterrows():
-        # Limpiar y concatenar entrada
-        dep = str(row.iloc[0]).strip().upper()
-        prov = str(row.iloc[1]).strip().upper()
-        dist = str(row.iloc[2]).strip().upper()
+        dep = str(row.iloc[0]).strip().upper() if pd.notna(row.iloc[0]) else ""
+        prov = str(row.iloc[1]).strip().upper() if pd.notna(row.iloc[1]) else ""
+        dist = str(row.iloc[2]).strip().upper() if pd.notna(row.iloc[2]) else ""
         busqueda = f"{dep} | {prov} | {dist}"
         
-        # Buscar en RapidFuzz (maneja abreviaturas y errores tipográficos)
         match = process.extractOne(busqueda, master_choices, scorer=fuzz.WRatio)
         
         if match and match[1] == 100:
-            resultados_exactos.append({
-                'Departamento_Orig': dep, 'Provincia_Orig': prov, 'Distrito_Orig': dist,
-                'Ubigeo_Oficial': ubigeo_dict[match[0]],
-                'Nombre_Oficial': match[0],
-                'Similitud': match[1]
-            })
+            data[idx] = {
+                'Original': busqueda, 'Dep_Orig': dep, 'Prov_Orig': prov, 'Dist_Orig': dist,
+                'Estado': 'Aprobado', 'Ubigeo_Oficial': ubigeo_dict[match[0]],
+                'Nombre_Oficial': match[0], 'Similitud': 100,
+                'Sugerencias': [], 'Opciones_Crudas': [], 'Edit_Mode': False
+            }
         else:
-            # Obtener top 5 opciones
             opciones = process.extract(busqueda, master_choices, scorer=fuzz.WRatio, limit=5)
             sugerencias = [f"{op[0]} (Similitud: {op[1]:.0f}%)" for op in opciones]
-            
-            resultados_pendientes.append({
-                'ID': idx,
-                'Original': busqueda,
-                'Sugerencias': sugerencias,
-                'Opciones_Crudas': [op[0] for op in opciones]
-            })
-            
+            data[idx] = {
+                'Original': busqueda, 'Dep_Orig': dep, 'Prov_Orig': prov, 'Dist_Orig': dist,
+                'Estado': 'Pendiente', 'Ubigeo_Oficial': '',
+                'Nombre_Oficial': '', 'Similitud': '',
+                'Sugerencias': sugerencias, 'Opciones_Crudas': [op[0] for op in opciones],
+                'Edit_Mode': False
+            }
         progress_bar.progress((idx + 1) / total)
         
-    return pd.DataFrame(resultados_exactos), resultados_pendientes
+    progress_bar.empty()
+    st.session_state['data'] = data
+    st.session_state['procesado'] = True
 
 # Pestañas de la interfaz
-tab1, tab2 = st.tabs(["🔄 Convertidor Masivo", "🔍 Consulta Inversa (Código a Texto)"])
+tab1, tab2 = st.tabs(["🔄 Convertidor Masivo", "🔍 Consulta Inversa"])
 
 with tab1:
     st.markdown("### Ingreso de Datos")
@@ -78,89 +71,143 @@ with tab1:
             df_input = pd.read_excel(uploaded_file)
             
     else:
-        st.info("Copia las celdas de tu Excel (sin los encabezados) y pégalas en el recuadro de abajo.")
-        txt_input = st.text_area("Pega aquí los datos:", height=150)
-        if txt_input:
-            df_input = pd.read_csv(io.StringIO(txt_input), sep='\t', header=None)
-            df_input.columns = ['Departamento', 'Provincia', 'Distrito']
+        st.info("Paso 1: Copia las 3 columnas de tu Excel (sin encabezados) y pégalas aquí:")
+        txt_input = st.text_area("Datos copiados:", height=150, label_visibility="collapsed")
+        
+        # Paso 2: Botón de carga intermedio
+        if st.button("📥 Cargar texto pegado", type="primary"):
+            if txt_input.strip():
+                try:
+                    df_temp = pd.read_csv(io.StringIO(txt_input), sep='\t', header=None)
+                    if len(df_temp.columns) >= 3:
+                        df_temp = df_temp.iloc[:, :3]
+                        df_temp.columns = ['Departamento', 'Provincia', 'Distrito']
+                        st.session_state['df_preview'] = df_temp
+                    else:
+                        st.error("Error: Los datos pegados no tienen 3 columnas. Verifica el copiado.")
+                except Exception as e:
+                    st.error("Error al leer el texto.")
+            else:
+                st.warning("El recuadro está vacío.")
 
+        # Paso 3: Vista previa
+        if 'df_preview' in st.session_state:
+            st.markdown("**Vista previa de datos cargados:**")
+            st.dataframe(st.session_state['df_preview'], height=200, use_container_width=True)
+            df_input = st.session_state['df_preview']
+
+    # Procesar
     if df_input is not None and not df_input.empty:
-        if st.button("Procesar Ubigeos", type="primary"):
-            df_exactos, pendientes = procesar_datos(df_input)
-            
-            st.session_state['df_exactos'] = df_exactos
-            st.session_state['pendientes'] = pendientes
-            
-    # Mostrar resultados si existen en sesión
-    if 'df_exactos' in st.session_state:
+        st.markdown("---")
+        if st.button("🚀 Procesar Ubigeos"):
+            iniciar_procesamiento(df_input)
+
+    # Mostrar Resultados interactivos
+    if 'procesado' in st.session_state and st.session_state['procesado']:
         st.divider()
         st.markdown("### Resultados de la Validación")
         
+        datos = st.session_state['data']
+        pendientes_count = sum(1 for v in datos.values() if v['Estado'] == 'Pendiente')
+        aprobados_count = len(datos) - pendientes_count
+        
         tab_exactos, tab_pendientes = st.tabs([
-            f"✅ Aprobados Automáticos ({len(st.session_state['df_exactos'])})", 
-            f"⚠️ Pendientes de Revisión ({len(st.session_state['pendientes'])})"
+            f"✅ Aprobados ({aprobados_count})", 
+            f"⚠️ Pendientes de Revisión ({pendientes_count})"
         ])
         
-        with tab_exactos:
-            st.dataframe(st.session_state['df_exactos'], use_container_width=True)
-            
         with tab_pendientes:
-            pendientes = st.session_state['pendientes']
-            if not pendientes:
-                st.success("¡Excelente! Todos los registros coincidieron al 100%.")
-                df_final = st.session_state['df_exactos']
+            if pendientes_count == 0:
+                st.success("¡Excelente! No hay registros pendientes.")
             else:
-                st.warning("Selecciona la opción correcta para los registros con errores tipográficos o abreviaturas.")
-                
-                with st.form("form_revision"):
-                    selecciones = []
-                    for item in pendientes:
-                        st.markdown(f"**Original ingresado:** `{item['Original']}`")
-                        seleccion = st.selectbox(
-                            "Selecciona la coincidencia correcta:",
-                            options=item['Sugerencias'],
-                            key=f"sel_{item['ID']}"
-                        )
-                        # Extraer el nombre original limpio de la selección
-                        idx_seleccionado = item['Sugerencias'].index(seleccion)
-                        selecciones.append(item['Opciones_Crudas'][idx_seleccionado])
-                        st.markdown("---")
-                        
-                    submit_revision = st.form_submit_button("Aprobar Selecciones y Consolidar")
-                    
-                    if submit_revision:
-                        # Crear dataframe de los corregidos
-                        corregidos_list = []
-                        for i, item in enumerate(pendientes):
-                            nombre_oficial = selecciones[i]
-                            partes = item['Original'].split(" | ")
-                            corregidos_list.append({
-                                'Departamento_Orig': partes[0] if len(partes)>0 else "", 
-                                'Provincia_Orig': partes[1] if len(partes)>1 else "", 
-                                'Distrito_Orig': partes[2] if len(partes)>2 else "",
-                                'Ubigeo_Oficial': ubigeo_dict[nombre_oficial],
-                                'Nombre_Oficial': nombre_oficial,
-                                'Similitud': 'Aprobado Manual'
-                            })
-                        df_corregidos = pd.DataFrame(corregidos_list)
-                        df_final = pd.concat([st.session_state['df_exactos'], df_corregidos], ignore_index=True)
-                        st.session_state['df_final'] = df_final
-                        st.success("Revisiones aprobadas. Ya puedes descargar el archivo consolidado.")
+                st.info("Revisa las sugerencias o edita manualmente para recalcular la coincidencia.")
+                for idx, item in datos.items():
+                    if item['Estado'] == 'Pendiente':
+                        # Interfaz más grande y enmarcada para la revisión
+                        with st.container(border=True):
+                            st.markdown(f"#### 🔍 Fila {idx + 1}: `{item['Original']}`")
+                            
+                            if not item['Edit_Mode']:
+                                col1, col2, col3 = st.columns([4, 1.5, 1.5])
+                                with col1:
+                                    sel = st.selectbox("Sugerencias aproximadas:", item['Sugerencias'], key=f"sel_{idx}")
+                                with col2:
+                                    st.write("") 
+                                    st.write("")
+                                    if st.button("✅ Aprobar", key=f"btn_apr_{idx}", use_container_width=True):
+                                        idx_sel = item['Sugerencias'].index(sel)
+                                        nombre_oficial = item['Opciones_Crudas'][idx_sel]
+                                        st.session_state['data'][idx]['Estado'] = 'Aprobado'
+                                        st.session_state['data'][idx]['Nombre_Oficial'] = nombre_oficial
+                                        st.session_state['data'][idx]['Ubigeo_Oficial'] = ubigeo_dict[nombre_oficial]
+                                        st.rerun()
+                                with col3:
+                                    st.write("")
+                                    st.write("")
+                                    if st.button("✏️ Edición Manual", key=f"btn_edit_{idx}", use_container_width=True):
+                                        st.session_state['data'][idx]['Edit_Mode'] = True
+                                        st.rerun()
+                            else:
+                                st.markdown("**Corrección Manual:**")
+                                c1, c2, c3 = st.columns(3)
+                                with c1:
+                                    new_dep = st.text_input("Departamento", item['Dep_Orig'], key=f"nd_{idx}")
+                                with c2:
+                                    new_prov = st.text_input("Provincia", item['Prov_Orig'], key=f"np_{idx}")
+                                with c3:
+                                    new_dist = st.text_input("Distrito", item['Dist_Orig'], key=f"ndi_{idx}")
+                                    
+                                cb1, cb2 = st.columns([2, 2])
+                                with cb1:
+                                    if st.button("🔍 Buscar nuevas coincidencias", type="primary", key=f"btn_busc_{idx}"):
+                                        busqueda_nueva = f"{new_dep.strip().upper()} | {new_prov.strip().upper()} | {new_dist.strip().upper()}"
+                                        opciones = process.extract(busqueda_nueva, master_choices, scorer=fuzz.WRatio, limit=5)
+                                        st.session_state['data'][idx]['Sugerencias'] = [f"{op[0]} (Similitud: {op[1]:.0f}%)" for op in opciones]
+                                        st.session_state['data'][idx]['Opciones_Crudas'] = [op[0] for op in opciones]
+                                        st.session_state['data'][idx]['Edit_Mode'] = False
+                                        st.rerun()
+                                with cb2:
+                                    if st.button("❌ Cancelar", key=f"btn_canc_{idx}"):
+                                        st.session_state['data'][idx]['Edit_Mode'] = False
+                                        st.rerun()
 
-        # Botón de descarga consolidada
-        if 'df_final' in st.session_state:
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                st.session_state['df_final'].to_excel(writer, index=False, sheet_name='Ubigeos_Validados')
-            datos_excel = output.getvalue()
+        # Generar DataFrame final manteniendo el ORDEN EXACTO ORIGINAL
+        final_data = []
+        for i in range(len(datos)):
+            item = datos[i]
+            final_data.append({
+                'Fila_Original': i + 1,
+                'Departamento_Orig': item['Dep_Orig'],
+                'Provincia_Orig': item['Prov_Orig'],
+                'Distrito_Orig': item['Dist_Orig'],
+                'Ubigeo_Oficial': item['Ubigeo_Oficial'],
+                'Nombre_Oficial': item['Nombre_Oficial'],
+                'Estado': item['Estado']
+            })
+        df_export = pd.DataFrame(final_data)
+
+        with tab_exactos:
+            st.dataframe(df_export[df_export['Estado'] == 'Aprobado'], use_container_width=True, hide_index=True)
+
+        # Botón de Descarga Global
+        st.divider()
+        if pendientes_count > 0:
+            st.warning(f"⚠️ Aún tienes {pendientes_count} registro(s) sin aprobar. Puedes descargar el Excel ahora, pero esos registros tendrán el Ubigeo en blanco.")
+        else:
+            st.success("✅ Todos los registros han sido aprobados. El Excel mantendrá el mismo orden de las filas originales.")
             
-            st.download_button(
-                label="📥 Descargar Excel Consolidado",
-                data=datos_excel,
-                file_name="Ubigeos_Validados.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_export.to_excel(writer, index=False, sheet_name='Ubigeos_Validados')
+        datos_excel = output.getvalue()
+        
+        st.download_button(
+            label="📥 Descargar Excel Consolidado",
+            data=datos_excel,
+            file_name="Ubigeos_Validados.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
 
 with tab2:
     st.markdown("### Consulta Inversa de Ubigeo")
