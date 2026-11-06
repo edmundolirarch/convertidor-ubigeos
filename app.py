@@ -38,7 +38,7 @@ def iniciar_procesamiento(df_input):
                 'Original': busqueda, 'Dep_Orig': dep, 'Prov_Orig': prov, 'Dist_Orig': dist,
                 'Estado': 'Aprobado', 'Ubigeo_Oficial': ubigeo_dict[match[0]],
                 'Nombre_Oficial': match[0], 'Similitud': 100,
-                'Sugerencias': [], 'Opciones_Crudas': [], 'Edit_Mode': False
+                'Sugerencias': [], 'Opciones_Crudas': [], 'Edit_Mode': False, 'Seleccionado': False
             }
         else:
             opciones = process.extract(busqueda, master_choices, scorer=fuzz.WRatio, limit=5)
@@ -48,7 +48,8 @@ def iniciar_procesamiento(df_input):
                 'Estado': 'Pendiente', 'Ubigeo_Oficial': '',
                 'Nombre_Oficial': '', 'Similitud': '',
                 'Sugerencias': sugerencias, 'Opciones_Crudas': [op[0] for op in opciones],
-                'Edit_Mode': False
+                'Edit_Mode': False, 
+                'Seleccionado': True # Preseleccionado por defecto
             }
         progress_bar.progress((idx + 1) / total)
         
@@ -104,12 +105,38 @@ with tab1:
 
     # Mostrar Resultados interactivos
     if 'procesado' in st.session_state and st.session_state['procesado']:
-        st.divider()
-        st.markdown("### Resultados de la Validación")
-        
         datos = st.session_state['data']
         pendientes_count = sum(1 for v in datos.values() if v['Estado'] == 'Pendiente')
         aprobados_count = len(datos) - pendientes_count
+
+        # Función de Aprobación en Lote
+        def aprobar_lote():
+            modificados = False
+            for i, d in st.session_state['data'].items():
+                if d['Estado'] == 'Pendiente' and st.session_state.get(f"chk_{i}", False):
+                    sel_text = st.session_state[f"sel_{i}"]
+                    idx_sel = d['Sugerencias'].index(sel_text)
+                    nombre_oficial = d['Opciones_Crudas'][idx_sel]
+                    
+                    st.session_state['data'][i]['Estado'] = 'Aprobado'
+                    st.session_state['data'][i]['Nombre_Oficial'] = nombre_oficial
+                    st.session_state['data'][i]['Ubigeo_Oficial'] = ubigeo_dict[nombre_oficial]
+                    modificados = True
+            if modificados:
+                st.rerun()
+
+        # PANEL LATERAL FLOTANTE PARA APROBACIÓN
+        if pendientes_count > 0:
+            with st.sidebar:
+                st.markdown("### ⚙️ Acciones en Lote")
+                st.info(f"Tienes **{pendientes_count}** registros pendientes en revisión.")
+                if st.button("✅ Aprobar Seleccionados (Lote)", type="primary", use_container_width=True):
+                    aprobar_lote()
+                st.divider()
+                st.markdown("💡 *Este panel siempre estará visible mientras bajas por la lista.*")
+
+        st.divider()
+        st.markdown("### Resultados de la Validación")
         
         tab_exactos, tab_pendientes = st.tabs([
             f"✅ Aprobados ({aprobados_count})", 
@@ -120,35 +147,48 @@ with tab1:
             if pendientes_count == 0:
                 st.success("¡Excelente! No hay registros pendientes.")
             else:
-                st.info("Revisa las sugerencias o edita manualmente para recalcular la coincidencia.")
+                # Botones de Selección Masiva (Arriba)
+                col_sel1, col_sel2, col_sel3 = st.columns([2, 2, 4])
+                with col_sel1:
+                    if st.button("☑️ Marcar Todos"):
+                        for i, d in st.session_state['data'].items():
+                            if d['Estado'] == 'Pendiente':
+                                st.session_state['data'][i]['Seleccionado'] = True
+                                st.session_state[f"chk_{i}"] = True
+                        st.rerun()
+                with col_sel2:
+                    if st.button("☐ Desmarcar Todos"):
+                        for i, d in st.session_state['data'].items():
+                            if d['Estado'] == 'Pendiente':
+                                st.session_state['data'][i]['Seleccionado'] = False
+                                st.session_state[f"chk_{i}"] = False
+                        st.rerun()
+                with col_sel3:
+                    if st.button("✅ Aprobar Seleccionados", type="primary"):
+                        aprobar_lote()
+
+                st.info("Revisa las sugerencias, mantén marcados los correctos y aprueba por lote usando el botón de arriba o el menú lateral.")
+                
+                # Lista de Pendientes
                 for idx, item in datos.items():
                     if item['Estado'] == 'Pendiente':
-                        # Interfaz más grande y enmarcada para la revisión
                         with st.container(border=True):
-                            st.markdown(f"#### 🔍 Fila {idx + 1}: `{item['Original']}`")
-                            
                             if not item['Edit_Mode']:
-                                col1, col2, col3 = st.columns([4, 1.5, 1.5])
-                                with col1:
-                                    sel = st.selectbox("Sugerencias aproximadas:", item['Sugerencias'], key=f"sel_{idx}")
-                                with col2:
+                                col_chk, col_info, col_btn = st.columns([0.5, 5, 1.5])
+                                with col_chk:
                                     st.write("") 
-                                    st.write("")
-                                    if st.button("✅ Aprobar", key=f"btn_apr_{idx}", use_container_width=True):
-                                        idx_sel = item['Sugerencias'].index(sel)
-                                        nombre_oficial = item['Opciones_Crudas'][idx_sel]
-                                        st.session_state['data'][idx]['Estado'] = 'Aprobado'
-                                        st.session_state['data'][idx]['Nombre_Oficial'] = nombre_oficial
-                                        st.session_state['data'][idx]['Ubigeo_Oficial'] = ubigeo_dict[nombre_oficial]
-                                        st.rerun()
-                                with col3:
-                                    st.write("")
+                                    chk = st.checkbox("Sel", value=item['Seleccionado'], key=f"chk_{idx}", label_visibility="collapsed")
+                                    st.session_state['data'][idx]['Seleccionado'] = chk
+                                with col_info:
+                                    st.markdown(f"**Fila {idx + 1}:** `{item['Original']}`")
+                                    sel = st.selectbox("Sugerencias:", item['Sugerencias'], key=f"sel_{idx}", label_visibility="collapsed")
+                                with col_btn:
                                     st.write("")
                                     if st.button("✏️ Edición Manual", key=f"btn_edit_{idx}", use_container_width=True):
                                         st.session_state['data'][idx]['Edit_Mode'] = True
                                         st.rerun()
                             else:
-                                st.markdown("**Corrección Manual:**")
+                                st.markdown(f"#### ✏️ Editando Fila {idx + 1}: `{item['Original']}`")
                                 c1, c2, c3 = st.columns(3)
                                 with c1:
                                     new_dep = st.text_input("Departamento", item['Dep_Orig'], key=f"nd_{idx}")
@@ -165,6 +205,9 @@ with tab1:
                                         st.session_state['data'][idx]['Sugerencias'] = [f"{op[0]} (Similitud: {op[1]:.0f}%)" for op in opciones]
                                         st.session_state['data'][idx]['Opciones_Crudas'] = [op[0] for op in opciones]
                                         st.session_state['data'][idx]['Edit_Mode'] = False
+                                        # DESMARCAR al hacer búsqueda manual para obligar confirmación visual
+                                        st.session_state['data'][idx]['Seleccionado'] = False
+                                        st.session_state[f"chk_{idx}"] = False
                                         st.rerun()
                                 with cb2:
                                     if st.button("❌ Cancelar", key=f"btn_canc_{idx}"):
