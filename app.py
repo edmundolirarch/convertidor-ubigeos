@@ -18,8 +18,10 @@ def load_master():
 df_master = load_master()
 master_choices = df_master['Concat'].tolist()
 ubigeo_dict = dict(zip(df_master['Concat'], df_master['Ubigeo']))
+# Diccionario inverso para búsquedas rápidas por código
+master_inv_dict = df_master.set_index('Ubigeo')[['Departamento', 'Provincia', 'Distrito']].to_dict('index')
 
-# Función inicial de procesamiento
+# Función inicial de procesamiento (Pestaña 1)
 def iniciar_procesamiento(df_input):
     data = {}
     progress_bar = st.progress(0)
@@ -58,25 +60,27 @@ def iniciar_procesamiento(df_input):
     st.session_state['procesado'] = True
 
 # Pestañas de la interfaz
-tab1, tab2 = st.tabs(["🔄 Convertidor Masivo", "🔍 Consulta Inversa"])
+tab1, tab2 = st.tabs(["🔄 Convertidor Masivo", "🔍 Consulta Inversa (Código a Texto)"])
 
+# ==========================================
+# PESTAÑA 1: CONVERTIDOR MASIVO
+# ==========================================
 with tab1:
     st.markdown("### Ingreso de Datos")
-    metodo = st.radio("Selecciona el método de carga:", ["Cargar archivo Excel (.xlsx)", "Copiar y Pegar desde Excel"])
+    metodo = st.radio("Selecciona el método de carga:", ["Cargar archivo Excel (.xlsx)", "Copiar y Pegar desde Excel"], key="radio_t1")
     
     df_input = None
     
     if metodo == "Cargar archivo Excel (.xlsx)":
-        uploaded_file = st.file_uploader("Sube tu archivo (Debe contener 3 columnas: Depto, Prov, Dist)", type=["xlsx"])
+        uploaded_file = st.file_uploader("Sube tu archivo (Debe contener 3 columnas: Depto, Prov, Dist)", type=["xlsx"], key="up_t1")
         if uploaded_file is not None:
-            df_input = pd.read_excel(uploaded_file)
+            df_input = pd.read_excel(uploaded_file, header=None) # Forzar lectura sin asumir encabezados
             
     else:
         st.info("Paso 1: Copia las 3 columnas de tu Excel (sin encabezados) y pégalas aquí:")
-        txt_input = st.text_area("Datos copiados:", height=150, label_visibility="collapsed")
+        txt_input = st.text_area("Datos copiados:", height=150, label_visibility="collapsed", key="txt_t1")
         
-        # Paso 2: Botón de carga intermedio
-        if st.button("📥 Cargar texto pegado", type="primary"):
+        if st.button("📥 Cargar texto pegado", type="primary", key="btn_carg_t1"):
             if txt_input.strip():
                 try:
                     df_temp = pd.read_csv(io.StringIO(txt_input), sep='\t', header=None)
@@ -91,25 +95,23 @@ with tab1:
             else:
                 st.warning("El recuadro está vacío.")
 
-        # Paso 3: Vista previa
         if 'df_preview' in st.session_state:
             st.markdown("**Vista previa de datos cargados:**")
             st.dataframe(st.session_state['df_preview'], height=200, use_container_width=True)
             df_input = st.session_state['df_preview']
 
-    # Procesar
+    # Procesar Pestaña 1
     if df_input is not None and not df_input.empty:
         st.markdown("---")
-        if st.button("🚀 Procesar Ubigeos"):
+        if st.button("🚀 Procesar Ubigeos", key="btn_proc_t1"):
             iniciar_procesamiento(df_input)
 
-    # Mostrar Resultados interactivos
+    # Mostrar Resultados Pestaña 1
     if 'procesado' in st.session_state and st.session_state['procesado']:
         datos = st.session_state['data']
         pendientes_count = sum(1 for v in datos.values() if v['Estado'] == 'Pendiente')
         aprobados_count = len(datos) - pendientes_count
 
-        # Función de Aprobación en Lote
         def aprobar_lote():
             modificados = False
             for i, d in st.session_state['data'].items():
@@ -125,7 +127,7 @@ with tab1:
             if modificados:
                 st.rerun()
 
-        # PANEL LATERAL FLOTANTE PARA APROBACIÓN
+        # PANEL LATERAL
         if pendientes_count > 0:
             with st.sidebar:
                 st.markdown("### ⚙️ Acciones en Lote")
@@ -138,16 +140,12 @@ with tab1:
         st.divider()
         st.markdown("### Resultados de la Validación")
         
-        tab_exactos, tab_pendientes = st.tabs([
-            f"✅ Aprobados ({aprobados_count})", 
-            f"⚠️ Pendientes de Revisión ({pendientes_count})"
-        ])
+        tab_exactos, tab_pendientes = st.tabs([f"✅ Aprobados ({aprobados_count})", f"⚠️ Pendientes de Revisión ({pendientes_count})"])
         
         with tab_pendientes:
             if pendientes_count == 0:
                 st.success("¡Excelente! No hay registros pendientes.")
             else:
-                # Botones de Selección Masiva (Arriba)
                 col_sel1, col_sel2, col_sel3 = st.columns([2, 2, 4])
                 with col_sel1:
                     if st.button("☑️ Marcar Todos"):
@@ -167,9 +165,6 @@ with tab1:
                     if st.button("✅ Aprobar Seleccionados", type="primary"):
                         aprobar_lote()
 
-                st.info("Revisa las sugerencias, mantén marcados los correctos y aprueba por lote usando el botón de arriba o el menú lateral.")
-                
-                # Lista de Pendientes
                 for idx, item in datos.items():
                     if item['Estado'] == 'Pendiente':
                         with st.container(border=True):
@@ -199,13 +194,12 @@ with tab1:
                                     
                                 cb1, cb2 = st.columns([2, 2])
                                 with cb1:
-                                    if st.button("🔍 Buscar nuevas coincidencias", type="primary", key=f"btn_busc_{idx}"):
+                                    if st.button("🔍 Buscar coincidencias", type="primary", key=f"btn_busc_{idx}"):
                                         busqueda_nueva = f"{new_dep.strip().upper()} | {new_prov.strip().upper()} | {new_dist.strip().upper()}"
                                         opciones = process.extract(busqueda_nueva, master_choices, scorer=fuzz.WRatio, limit=5)
                                         st.session_state['data'][idx]['Sugerencias'] = [f"{op[0]} (Similitud: {op[1]:.0f}%)" for op in opciones]
                                         st.session_state['data'][idx]['Opciones_Crudas'] = [op[0] for op in opciones]
                                         st.session_state['data'][idx]['Edit_Mode'] = False
-                                        # DESMARCAR al hacer búsqueda manual para obligar confirmación visual
                                         st.session_state['data'][idx]['Seleccionado'] = False
                                         st.session_state[f"chk_{idx}"] = False
                                         st.rerun()
@@ -214,30 +208,22 @@ with tab1:
                                         st.session_state['data'][idx]['Edit_Mode'] = False
                                         st.rerun()
 
-        # Generar DataFrame final manteniendo el ORDEN EXACTO ORIGINAL
         final_data = []
         for i in range(len(datos)):
             item = datos[i]
             final_data.append({
-                'Fila_Original': i + 1,
-                'Departamento_Orig': item['Dep_Orig'],
-                'Provincia_Orig': item['Prov_Orig'],
-                'Distrito_Orig': item['Dist_Orig'],
-                'Ubigeo_Oficial': item['Ubigeo_Oficial'],
-                'Nombre_Oficial': item['Nombre_Oficial'],
-                'Estado': item['Estado']
+                'Fila_Original': i + 1, 'Departamento_Orig': item['Dep_Orig'], 'Provincia_Orig': item['Prov_Orig'],
+                'Distrito_Orig': item['Dist_Orig'], 'Ubigeo_Oficial': item['Ubigeo_Oficial'],
+                'Nombre_Oficial': item['Nombre_Oficial'], 'Estado': item['Estado']
             })
         df_export = pd.DataFrame(final_data)
 
         with tab_exactos:
             st.dataframe(df_export[df_export['Estado'] == 'Aprobado'], use_container_width=True, hide_index=True)
 
-        # Botón de Descarga Global
         st.divider()
         if pendientes_count > 0:
-            st.warning(f"⚠️ Aún tienes {pendientes_count} registro(s) sin aprobar. Puedes descargar el Excel ahora, pero esos registros tendrán el Ubigeo en blanco.")
-        else:
-            st.success("✅ Todos los registros han sido aprobados. El Excel mantendrá el mismo orden de las filas originales.")
+            st.warning(f"⚠️ Aún tienes {pendientes_count} registro(s) sin aprobar.")
             
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -245,24 +231,125 @@ with tab1:
         datos_excel = output.getvalue()
         
         st.download_button(
-            label="📥 Descargar Excel Consolidado",
-            data=datos_excel,
-            file_name="Ubigeos_Validados.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            label="📥 Descargar Excel Consolidado", data=datos_excel,
+            file_name="Ubigeos_Validados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
 
+
+# ==========================================
+# PESTAÑA 2: CONSULTA INVERSA (MASIVA E INDIVIDUAL)
+# ==========================================
 with tab2:
-    st.markdown("### Consulta Inversa de Ubigeo")
-    codigo_input = st.text_input("Ingresa el código de 6 dígitos (Ej: 010101):", max_chars=6)
+    st.markdown("### 🔍 Consulta Individual")
+    codigo_input = st.text_input("Ingresa un solo código de 6 dígitos (Ej: 010101):", max_chars=6)
     
     if codigo_input:
         if len(codigo_input) == 6 and codigo_input.isdigit():
-            resultado = df_master[df_master['Ubigeo'] == codigo_input]
-            if not resultado.empty:
+            if codigo_input in master_inv_dict:
                 st.success("Ubigeo encontrado:")
-                st.dataframe(resultado[['Ubigeo', 'Departamento', 'Provincia', 'Distrito']], hide_index=True)
+                row_ind = master_inv_dict[codigo_input]
+                df_ind = pd.DataFrame([{"Ubigeo": codigo_input, "Departamento": row_ind['Departamento'], 
+                                        "Provincia": row_ind['Provincia'], "Distrito": row_ind['Distrito']}])
+                st.dataframe(df_ind, hide_index=True, use_container_width=True)
             else:
                 st.error("El código ingresado no existe en la base de datos.")
         else:
             st.warning("El ubigeo debe contener exactamente 6 números.")
+
+    st.divider()
+    
+    st.markdown("### 🗂️ Consulta Masiva por Lotes")
+    metodo_inv = st.radio("Selecciona el método de carga (Debe ser 1 sola columna con los códigos numéricos):", 
+                          ["Cargar archivo Excel (.xlsx)", "Copiar y Pegar desde Excel"], key="radio_inv")
+
+    df_input_inv = None
+
+    if metodo_inv == "Cargar archivo Excel (.xlsx)":
+        uploaded_file_inv = st.file_uploader("Sube tu archivo con códigos de Ubigeo", type=["xlsx"], key="up_inv")
+        if uploaded_file_inv is not None:
+            df_input_inv = pd.read_excel(uploaded_file_inv, header=None)
+            
+    else:
+        st.info("Paso 1: Copia la columna de códigos de tu Excel (sin encabezados) y pégala aquí:")
+        txt_input_inv = st.text_area("Códigos copiados:", height=150, label_visibility="collapsed", key="txt_inv")
+        
+        if st.button("📥 Cargar códigos pegados", type="primary", key="btn_carg_inv"):
+            if txt_input_inv.strip():
+                try:
+                    df_temp_inv = pd.read_csv(io.StringIO(txt_input_inv), sep='\t', header=None, dtype=str)
+                    st.session_state['df_preview_inv'] = df_temp_inv.iloc[:, :1] # Tomar solo la primera columna
+                except Exception as e:
+                    st.error("Error al leer el texto.")
+            else:
+                st.warning("El recuadro está vacío.")
+
+        if 'df_preview_inv' in st.session_state:
+            st.markdown("**Vista previa de códigos cargados:**")
+            st.dataframe(st.session_state['df_preview_inv'], height=150, use_container_width=True)
+            df_input_inv = st.session_state['df_preview_inv']
+
+    # Procesamiento Masivo Inverso
+    if df_input_inv is not None and not df_input_inv.empty:
+        st.markdown("---")
+        if st.button("🚀 Procesar Códigos Masivos", key="btn_proc_inv"):
+            raw_codes = df_input_inv.iloc[:, 0].astype(str)
+            # Limpiar: quitar ".0" si Excel lo pasó como flotante, borrar espacios y rellenar 6 ceros
+            clean_codes = raw_codes.str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(6)
+            
+            resultados_inv = []
+            errores_inv = 0
+            
+            for i, code in enumerate(clean_codes):
+                if code in master_inv_dict:
+                    row_data = master_inv_dict[code]
+                    resultados_inv.append({
+                        "Fila": i + 1,
+                        "Ubigeo_Ingresado": raw_codes.iloc[i],
+                        "Ubigeo_Seis_Digitos": code,
+                        "Departamento": row_data['Departamento'],
+                        "Provincia": row_data['Provincia'],
+                        "Distrito": row_data['Distrito']
+                    })
+                else:
+                    errores_inv += 1
+                    resultados_inv.append({
+                        "Fila": i + 1,
+                        "Ubigeo_Ingresado": raw_codes.iloc[i],
+                        "Ubigeo_Seis_Digitos": code,
+                        "Departamento": "NO ENCONTRADO",
+                        "Provincia": "NO ENCONTRADO",
+                        "Distrito": "NO ENCONTRADO"
+                    })
+                    
+            st.session_state['resultados_inv'] = pd.DataFrame(resultados_inv)
+            st.session_state['errores_inv'] = errores_inv
+
+    # Mostrar Resultados Inversos Masivos
+    if 'resultados_inv' in st.session_state:
+        st.divider()
+        st.markdown("### Resultados de la Consulta Masiva")
+        
+        df_res = st.session_state['resultados_inv']
+        errores = st.session_state['errores_inv']
+        
+        if errores > 0:
+            st.error(f"⚠️ Atención: Se encontraron {errores} código(s) que no existen en el catálogo oficial. Aparecerán marcados como 'NO ENCONTRADO'.")
+        else:
+            st.success("✅ Todos los códigos fueron encontrados correctamente. El Excel mantendrá el mismo orden de las filas originales.")
+            
+        st.dataframe(df_res, hide_index=True, use_container_width=True)
+        
+        output_inv = io.BytesIO()
+        with pd.ExcelWriter(output_inv, engine='openpyxl') as writer:
+            df_res.to_excel(writer, index=False, sheet_name='Consulta_Inversa_Masiva')
+        datos_excel_inv = output_inv.getvalue()
+        
+        st.download_button(
+            label="📥 Descargar Resultados Masivos (Excel)",
+            data=datos_excel_inv,
+            file_name="Consulta_Inversa_Masiva.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            key="btn_down_inv"
+        )
