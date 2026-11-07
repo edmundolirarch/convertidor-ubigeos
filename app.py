@@ -60,14 +60,48 @@ def iniciar_procesamiento(df_input):
     st.session_state['procesado'] = True
 
 # Pestañas de la interfaz
-tab1, tab2 = st.tabs(["🔄 Convertidor Masivo", "🔍 Consulta Inversa (Código a Texto)"])
+tab1, tab2 = st.tabs(["🔄 Convertidor de Texto a Código", "🔍 Consulta Inversa (Código a Texto)"])
 
 # ==========================================
-# PESTAÑA 1: CONVERTIDOR MASIVO
+# PESTAÑA 1: CONVERTIDOR (INDIVIDUAL Y MASIVO)
 # ==========================================
 with tab1:
-    st.markdown("### Ingreso de Datos")
-    metodo = st.radio("Selecciona el método de carga:", ["Cargar archivo Excel (.xlsx)", "Copiar y Pegar desde Excel"], key="radio_t1")
+    st.markdown("### 🔍 Consulta Individual")
+    col_ind_1, col_ind_2, col_ind_3 = st.columns(3)
+    with col_ind_1: dep_ind = st.text_input("Departamento", key="ind_dep_t1")
+    with col_ind_2: prov_ind = st.text_input("Provincia", key="ind_prov_t1")
+    with col_ind_3: dist_ind = st.text_input("Distrito", key="ind_dist_t1")
+    
+    if st.button("🔎 Buscar Ubigeo", type="primary", key="btn_ind_t1"):
+        if dep_ind or prov_ind or dist_ind:
+            busqueda_ind = f"{dep_ind.strip().upper()} | {prov_ind.strip().upper()} | {dist_ind.strip().upper()}"
+            match = process.extractOne(busqueda_ind, master_choices, scorer=fuzz.WRatio)
+            
+            if match:
+                oficial = match[0]
+                similitud = match[1]
+                ubigeo = ubigeo_dict[oficial]
+                
+                if similitud == 100:
+                    st.success(f"✅ Coincidencia exacta ({similitud:.0f}%)")
+                elif similitud >= 80:
+                    st.warning(f"⚠️ Coincidencia aproximada ({similitud:.0f}%)")
+                else:
+                    st.error(f"⚠️ Coincidencia baja ({similitud:.0f}%). Revisa la ortografía.")
+                
+                c_res1, c_res2 = st.columns([1, 4])
+                with c_res1:
+                    st.markdown("**Ubigeo (Clic para copiar):**")
+                    st.code(ubigeo, language="text")
+                with c_res2:
+                    st.info(f"**Resultado Oficial:** {oficial}")
+        else:
+            st.warning("Ingresa al menos un dato para realizar la búsqueda.")
+
+    st.divider()
+
+    st.markdown("### 🗂️ Convertidor Masivo por Lotes")
+    metodo = st.radio("Selecciona el método de carga masiva:", ["Cargar archivo Excel (.xlsx)", "Copiar y Pegar desde Excel"], key="radio_t1")
     
     df_input = None
     
@@ -103,7 +137,7 @@ with tab1:
     # Procesar Pestaña 1
     if df_input is not None and not df_input.empty:
         st.markdown("---")
-        if st.button("🚀 Procesar Ubigeos", key="btn_proc_t1"):
+        if st.button("🚀 Procesar Ubigeos Masivos", key="btn_proc_t1"):
             iniciar_procesamiento(df_input)
 
     # Mostrar Resultados Pestaña 1
@@ -132,13 +166,13 @@ with tab1:
             with st.sidebar:
                 st.markdown("### ⚙️ Acciones en Lote")
                 st.info(f"Tienes **{pendientes_count}** registros pendientes en revisión.")
-                if st.button("✅ Aprobar Seleccionados (Lote)", type="primary", use_container_width=True):
+                if st.button("✅ Aprobar Seleccionados", type="primary", use_container_width=True):
                     aprobar_lote()
                 st.divider()
-                st.markdown("💡 *Este panel siempre estará visible mientras bajas por la lista.*")
+                st.markdown("💡 *Este panel te acompaña mientras revisas la lista.*")
 
         st.divider()
-        st.markdown("### Resultados de la Validación")
+        st.markdown("### Resultados de la Validación Masiva")
         
         tab_exactos, tab_pendientes = st.tabs([f"✅ Aprobados ({aprobados_count})", f"⚠️ Pendientes de Revisión ({pendientes_count})"])
         
@@ -162,7 +196,7 @@ with tab1:
                                 st.session_state[f"chk_{i}"] = False
                         st.rerun()
                 with col_sel3:
-                    if st.button("✅ Aprobar Seleccionados", type="primary"):
+                    if st.button("✅ Aprobar Seleccionados", type="primary", key="btn_apr_top"):
                         aprobar_lote()
 
                 for idx, item in datos.items():
@@ -223,7 +257,7 @@ with tab1:
 
         st.divider()
         if pendientes_count > 0:
-            st.warning(f"⚠️ Aún tienes {pendientes_count} registro(s) sin aprobar.")
+            st.warning(f"⚠️ Aún tienes {pendientes_count} registro(s) sin aprobar. Puedes descargar el Excel ahora, pero esos registros tendrán el Ubigeo en blanco.")
             
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -233,7 +267,7 @@ with tab1:
         st.download_button(
             label="📥 Descargar Excel Consolidado", data=datos_excel,
             file_name="Ubigeos_Validados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
+            type="primary", key="btn_down_t1"
         )
 
 
